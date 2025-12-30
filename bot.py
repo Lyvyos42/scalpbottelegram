@@ -1,4 +1,16 @@
-from flask import Flask, request, jsonify
+# Add this at the top
+import logging
+logging.basicConfig(level=logging.INFO)
+
+# Inside webhook function, add:
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    try:
+        print("=== WEBHOOK RECEIVED ===")  # This shows in Render logs
+        data = request.get_json()
+        print(f"Data: {data}")
+        # ... rest of your code
+        from flask import Flask, request, jsonify
 import os
 import telegram
 import json
