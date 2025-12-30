@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 import os
-import telebot
+import telegram
 
 app = Flask(__name__)
 
@@ -8,7 +8,8 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
 
-bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
+# Initialize bot
+bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -46,3 +47,4 @@ def home():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
