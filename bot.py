@@ -4,7 +4,6 @@ import json
 import math
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
-import requests
 import logging
 from dataclasses import dataclass
 import hashlib
@@ -859,4 +858,5 @@ if __name__ == '__main__':
     logger.info(f"🔧 Alert Mode: {ALERT_MODE}")
     logger.info(f"🤖 Telegram configured: {bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)}")
     
+
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
