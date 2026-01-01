@@ -1,0 +1,45 @@
+//@version=6
+indicator("Telegram Alert Template", overlay=true)
+
+// ========= ALERT SETTINGS =========
+// Note: In the Alert Dialog, check "Webhook URL" and paste your Railway URL
+enable_alerts = input.bool(true, title="Enable Telegram Alerts")
+
+// ... Your Indicator Logic Here ...
+// Example: Simple SMA Crossover
+fast_ma = ta.sma(close, 14)
+slow_ma = ta.sma(close, 28)
+plot(fast_ma, color=color.green)
+plot(slow_ma, color=color.red)
+
+// Conditions
+buy_signal = ta.crossover(fast_ma, slow_ma)
+sell_signal = ta.crossunder(fast_ma, slow_ma)
+
+// ========= JSON CONSTRUCTOR =========
+// This function builds the exact JSON the bot needs
+create_json_alert(action, price, sl_price, tp1, tp2, tp3) =>
+    string json = "{"
+    json += "\"pair\": \"" + syminfo.ticker + "\", "
+    json += "\"action\": \"" + action + "\", "
+    json += "\"price\": " + str.tostring(price) + ", "
+    json += "\"timeframe\": \"" + timeframe.period + "\""
+    
+    // Optional: Send calculated SL/TP if you have them
+    // If you don't send them, the Python bot will calculate them automatically
+    // json += ", \"stop_loss\": " + str.tostring(sl_price)
+    
+    json += "}"
+    json
+
+// ========= TRIGGER ALERTS =========
+if buy_signal and enable_alerts
+    // "alert.freq_once_per_bar" ensures it doesn't spam during the candle
+    alert(create_json_alert("LONG", close, na, na, na, na), alert.freq_once_per_bar_close)
+
+if sell_signal and enable_alerts
+    alert(create_json_alert("SHORT", close, na, na, na, na), alert.freq_once_per_bar_close)
+
+// Visuals
+plotshape(buy_signal, style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small)
+plotshape(sell_signal, style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small)

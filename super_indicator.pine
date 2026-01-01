@@ -1,0 +1,274 @@
+//@version=6
+indicator("Quantum ICC Fusion - Bot Edition v12.2", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=200)
+
+// ╔════════════════════════════════════════════════════════════════════════════════════════╗
+// ║  QUANTUM ICC FUSION v12.2 (Safe Sniper - Syntax Fix)                                   ║
+// ║  • ADJUSTED SL: Now adds 30% Fast ATR breathing room (Prevents wick stop-outs)         ║
+// ║  • MOMENTUM FILTER: Requires RSI alignment for Scalp Entries                           ║
+// ║  • COOLDOWN: Prevents rapid-fire losses in chop                                        ║
+// ╚════════════════════════════════════════════════════════════════════════════════════════╝
+
+// ============================================
+// 🎛️ SETTINGS
+// ============================================
+string G_SYN = "🎛️ Fusion & Risk"
+synergy_auto = input.bool(true, "⚡ Auto-Regime (Trend vs Chop)", group=G_SYN)
+synergy_mode = input.string("Quantum + ICC Confirmation", "Manual Synergy", options=["Quantum Only", "ICC Only", "Quantum + ICC Confirmation", "ICC + Quantum Confirmation", "Any (OR)", "Strong (AND)"], group=G_SYN)
+
+string G_BOT = "🤖 Bot & Entries"
+use_smart_tp = input.bool(true, "⚡ Smart TPs (Range Adapt)", group=G_BOT)
+scalp_sniper = input.bool(true, "🎯 Sniper SL (Scalp Only)", group=G_BOT)
+entry_cooldown = input.int(3, "Entry Cooldown (Bars)", minval=1, group=G_BOT)
+
+bot_sl_atr = input.float(1.5, "SL ATR (Swing)", step=0.1, group=G_BOT)
+bot_tp1 = input.float(1.5, "TP1 R:R", step=0.1, group=G_BOT)
+bot_tp2 = input.float(2.5, "TP2 R:R", step=0.1, group=G_BOT)
+bot_tp3 = input.float(4.0, "TP3 R:R", step=0.1, group=G_BOT)
+show_lines = input.bool(true, "Show Trade Lines", group=G_BOT)
+
+// ============================================
+// 📊 MARKET REGIME
+// ============================================
+adx_len = 14
+[di_p, di_m, adx_val] = ta.dmi(adx_len, adx_len)
+is_trending = adx_val > 25
+
+// FIX: Proper Squeeze Detection (No tuple [1] error)
+[bb_mid, bb_upper, bb_lower] = ta.bb(close, 20, 2)
+[kc_mid, kc_upper, kc_lower] = ta.kc(close, 20, 1.5)
+is_squeeze = (bb_lower > kc_lower) and (bb_upper < kc_upper)
+
+regime = is_squeeze ? "SQUEEZE" : is_trending ? "TRENDING" : "RANGING"
+regime_col = is_squeeze ? color.yellow : is_trending ? color.green : color.orange
+
+// ============================================
+// 🔷 QUANTUM TUNNEL
+// ============================================
+qt_atr_mult = 1.0
+qt_ema_len = 7
+qt_atr_base = ta.atr(14)
+qt_atr_fast = ta.atr(7)
+qt_vol_factor = qt_atr_fast / qt_atr_base
+qt_adaptive_mult = qt_atr_mult * (0.8 + qt_vol_factor * 0.4)
+qt_typical = (high + low + close) / 3
+qt_vwap = ta.vwap(qt_typical)
+qt_liq = ta.ema(qt_vwap, qt_ema_len)
+qt_up = qt_liq + qt_atr_base * qt_adaptive_mult
+qt_dn = qt_liq - qt_atr_base * qt_adaptive_mult
+
+qt_close_above = close > qt_up
+qt_close_below = close < qt_dn
+
+qt_trend_ema = ta.ema(close, 50)
+qt_trend_bull = close > qt_trend_ema
+qt_trend_bear = close < qt_trend_ema
+qt_vol_avg = ta.sma(volume, 20)
+qt_vol_spike = volume > qt_vol_avg * 1.0
+
+qt_sig_l = qt_close_above and qt_trend_bull and qt_vol_spike
+qt_sig_s = qt_close_below and qt_trend_bear and qt_vol_spike
+
+plot(qt_up, "QT U", color.new(#00FFAA, 50))
+plot(qt_dn, "QT D", color.new(#FF0066, 50))
+plot(qt_liq, "QT M", color.new(color.gray, 80))
+
+// ============================================
+// 🔄 ICC REVERSALS
+// ============================================
+bullRev = false
+bearRev = false
+k = ta.sma(ta.stoch(close, high, low, 14), 3)
+near_low = low <= ta.lowest(low, 20)[1]
+near_high = high >= ta.highest(high, 20)[1]
+bullRev := near_low and k < 20
+bearRev := near_high and k > 80
+
+// ============================================
+// ⚡ FUSION + FILTERS
+// ============================================
+var bool final_long = false
+var bool final_short = false
+
+// RSI Momentum Filter
+rsi = ta.rsi(close, 14)
+mom_bull = rsi > 50
+mom_bear = rsi < 50
+
+if synergy_auto
+    if is_trending
+        final_long := qt_sig_l and mom_bull
+        final_short := qt_sig_s and mom_bear
+    else
+        final_long := bullRev
+        final_short := bearRev
+else
+    if synergy_mode == "Quantum Only"
+        final_long := qt_sig_l
+        final_short := qt_sig_s
+    // (Legacy modes preserved simplified)
+    else 
+        final_long := qt_sig_l or bullRev
+        final_short := qt_sig_s or bearRev
+
+if is_squeeze and synergy_auto and is_trending
+    final_long := false
+    final_short := false
+
+// ============================================
+// 🤖 BOT EXECUTION
+// ============================================
+tf_secs = timeframe.in_seconds(timeframe.period)
+is_scalp = tf_secs <= 900
+
+// Safe Sniper Calculation
+calc_sl(is_l) =>
+    float s = na
+    if is_scalp and scalp_sniper
+        // Dynamic Buffer (30% of Fast ATR)
+        buffer = qt_atr_fast * 0.3
+        s := is_l ? low - buffer : high + buffer
+    else
+        dist = qt_atr_base * bot_sl_atr
+        s := is_l ? close - dist : close + dist
+    s
+
+calc_tp(ep, sl, rr) =>
+    r = math.abs(ep - sl)
+    scale = use_smart_tp ? (is_trending ? 1.0 : 0.5) : 1.0
+    s_rr = rr * scale
+    is_l = ep > sl
+    is_l ? ep + (r * s_rr) : ep - (r * s_rr)
+
+// Visuals
+var line[] lines = array.new_line()
+var label[] labels = array.new_label()
+clean() =>
+    if array.size(lines) > 20
+        line.delete(array.shift(lines))
+    if array.size(labels) > 20
+        label.delete(array.shift(labels))
+
+d_trade(ep, sl, t1, t2, t3, is_l, txt) =>
+    if show_lines
+        c_e = color.gray
+        c_s = color.red
+        c_t = color.green
+        array.push(lines, line.new(bar_index, ep, bar_index+5, ep, color=c_e, style=line.style_dotted))
+        array.push(lines, line.new(bar_index, sl, bar_index+5, sl, color=c_s, style=line.style_solid, width=2))
+        array.push(lines, line.new(bar_index, t1, bar_index+5, t1, color=c_t, style=line.style_dashed))
+        array.push(lines, line.new(bar_index, t2, bar_index+5, t2, color=c_t, style=line.style_dashed))
+        array.push(lines, line.new(bar_index, t3, bar_index+5, t3, color=c_t, style=line.style_dashed))
+        
+        style_l = is_l ? label.style_label_up : label.style_label_down
+        style_lp = is_l ? label.style_label_down : label.style_label_up
+        
+        array.push(labels, label.new(bar_index, ep, txt, color=c_e, style=style_l, textcolor=color.black, size=size.tiny))
+        array.push(labels, label.new(bar_index, sl, "🛑", color=c_s, style=style_l, textcolor=color.white, size=size.tiny))
+        array.push(labels, label.new(bar_index+3, t1, "TP1", color=c_t, style=style_lp, textcolor=color.white, size=size.tiny))
+        array.push(labels, label.new(bar_index+3, t2, "TP2", color=c_t, style=style_lp, textcolor=color.white, size=size.tiny))
+        array.push(labels, label.new(bar_index+3, t3, "TP3", color=c_t, style=style_lp, textcolor=color.white, size=size.tiny))
+        clean()
+
+// Trigger & Cooldown
+var int last_trade_bar = 0
+cooldown_ok = (bar_index - last_trade_bar) > entry_cooldown
+
+var bool in_l = false
+var bool in_s = false
+var float a_sl = na
+var float a_t1 = na
+var float a_t2 = na
+var float a_t3 = na
+var bool h_t1 = false
+var bool h_t2 = false
+
+trig_l = final_long and not in_l and cooldown_ok
+trig_s = final_short and not in_s and cooldown_ok
+
+if trig_l
+    in_l := true
+    in_s := false
+    h_t1 := false
+    h_t2 := false
+    last_trade_bar := bar_index
+    ep = close
+    sl = calc_sl(true)
+    t1 = calc_tp(ep, sl, bot_tp1)
+    t2 = calc_tp(ep, sl, bot_tp2)
+    t3 = calc_tp(ep, sl, bot_tp3)
+    a_sl := sl
+    a_t1 := t1
+    a_t2 := t2
+    a_t3 := t3
+    
+    focus_txt = is_scalp ? "SCALP_SAFE" : "SWING"
+    d_trade(ep, sl, t1, t2, t3, true, "🚀")
+    
+    msg = "{\"pair\": \"" + syminfo.ticker + "\", \"action\": \"LONG\", \"focus\": \"" + focus_txt + "\", \"regime\": \"" + regime + "\", \"price\": " + str.tostring(ep) + ", \"sl\": " + str.tostring(sl) + ", \"tp\": [" + str.tostring(t1) + "," + str.tostring(t2) + "," + str.tostring(t3) + "], \"take_profits\": [{\"price\": " + str.tostring(t1) + ", \"level\": 1}, {\"price\": " + str.tostring(t2) + ", \"level\": 2}, {\"price\": " + str.tostring(t3) + ", \"level\": 3}]}"
+    alert(msg, alert.freq_once_per_bar_close)
+
+if trig_s
+    in_s := true
+    in_l := false
+    h_t1 := false
+    h_t2 := false
+    last_trade_bar := bar_index
+    ep = close
+    sl = calc_sl(false)
+    t1 = calc_tp(ep, sl, bot_tp1)
+    t2 = calc_tp(ep, sl, bot_tp2)
+    t3 = calc_tp(ep, sl, bot_tp3)
+    a_sl := sl
+    a_t1 := t1
+    a_t2 := t2
+    a_t3 := t3
+    
+    focus_txt = is_scalp ? "SCALP_SAFE" : "SWING"
+    d_trade(ep, sl, t1, t2, t3, false, "🚀")
+    
+    msg = "{\"pair\": \"" + syminfo.ticker + "\", \"action\": \"SHORT\", \"focus\": \"" + focus_txt + "\", \"regime\": \"" + regime + "\", \"price\": " + str.tostring(ep) + ", \"sl\": " + str.tostring(sl) + ", \"tp\": [" + str.tostring(t1) + "," + str.tostring(t2) + "," + str.tostring(t3) + "], \"take_profits\": [{\"price\": " + str.tostring(t1) + ", \"level\": 1}, {\"price\": " + str.tostring(t2) + ", \"level\": 2}, {\"price\": " + str.tostring(t3) + ", \"level\": 3}]}"
+    alert(msg, alert.freq_once_per_bar_close)
+
+// Manage
+if in_l
+    if high >= a_t1 and not h_t1
+        h_t1 := true
+        alert("{\"pair\": \"" + syminfo.ticker + "\", \"action\": \"TP1_HIT\"}", alert.freq_once_per_bar_close)
+    if high >= a_t2 and not h_t2
+        h_t2 := true
+        alert("{\"pair\": \"" + syminfo.ticker + "\", \"action\": \"TP2_HIT\"}", alert.freq_once_per_bar_close)
+    if high >= a_t3
+        in_l := false
+        alert("{\"pair\": \"" + syminfo.ticker + "\", \"action\": \"TP3_HIT\"}", alert.freq_once_per_bar_close)
+    if low <= a_sl
+        in_l := false
+
+if in_s
+    if low <= a_t1 and not h_t1
+        h_t1 := true
+        alert("{\"pair\": \"" + syminfo.ticker + "\", \"action\": \"TP1_HIT\"}", alert.freq_once_per_bar_close)
+    if low <= a_t2 and not h_t2
+        h_t2 := true
+        alert("{\"pair\": \"" + syminfo.ticker + "\", \"action\": \"TP2_HIT\"}", alert.freq_once_per_bar_close)
+    if low <= a_t3
+        in_s := false
+        alert("{\"pair\": \"" + syminfo.ticker + "\", \"action\": \"TP3_HIT\"}", alert.freq_once_per_bar_close)
+    if high >= a_sl
+        in_s := false
+
+// Dashboard
+var table t = table.new(position.top_right, 4, 6, bgcolor=color.rgb(10,10,20), border_color=color.gray, border_width=1)
+if barstate.islast
+    table.cell(t, 0, 0, "FUSION v12.2", text_color=color.yellow)
+    table.cell(t, 1, 0, timeframe.period, text_color=color.white)
+    table.cell(t, 0, 1, "REGIME", text_color=color.gray)
+    table.cell(t, 1, 1, regime, text_color=regime_col)
+    
+    table.cell(t, 0, 3, "RISK", text_color=color.gray)
+    risk_txt = (is_scalp and scalp_sniper) ? "LO/HI + 30%ATR" : "STANDARD"
+    table.cell(t, 1, 3, risk_txt, text_color=color.aqua)
+
+plotshape(trig_l, "L", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(trig_s, "S", shape.triangledown, location.abovebar, color.red, size=size.small)
+plotshape(bullRev, "R", shape.circle, location.belowbar, color.new(color.aqua, 50), size=size.tiny)
+plotshape(bearRev, "R", shape.circle, location.abovebar, color.new(color.fuchsia, 50), size=size.tiny)

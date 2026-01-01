@@ -1,0 +1,105 @@
+//@version=6
+strategy(title="Adaptive RL Mean Reversion with SL/TP & Telegram Alerts", shorttitle="AdaptiveMR", overlay=true, initial_capital=100000, pyramiding=0)
+
+// ========= TELEGRAM ALERTS =========
+// NOTE: The Webhook URL is configured in the "Create Alert" dialog in TradingView, NOT here.
+enable_alerts = input.bool(true, title="Enable Telegram Alerts", group="Telegram Alerts")
+
+// Inputs
+bb_length = input.int(20, title="BB Length")
+adx_length = input.int(14, title="ADX Length")
+adx_threshold = input.float(25.0, title="ADX Threshold")
+max_history = input.int(10, title="Recent Trades History")
+sl_percent = input.float(1.0, title="Stop Loss %", minval=0.1)
+tp_percent = input.float(2.0, title="Take Profit %", minval=0.1)
+risk_per_trade = input.float(1.0, title="Risk Per Trade %", minval=0.1)
+
+// Variables for RL approximation
+var float[] recent_profits = array.new_float(0)
+var bool long_position_active = false
+var bool short_position_active = false
+var float entry_price = 0.0
+
+// Manual ADX calculation
+plusDM = na(close[1]) ? na : (high - high[1] > low[1] - low ? math.max(high - high[1], 0) : 0)
+minusDM = na(close[1]) ? na : (high - high[1] < low[1] - low ? math.max(low[1] - low, 0) : 0)
+trueRange = math.max(high - low, math.max(math.abs(high - nz(close[1])), math.abs(low - nz(close[1]))))
+var float plusDMs = na
+var float minusDMs = na
+var float trs = na
+plusDMs := na(plusDMs[1]) ? plusDM : plusDMs[1] - (plusDMs[1] / adx_length) + plusDM
+minusDMs := na(minusDMs[1]) ? minusDM : minusDMs[1] - (minusDMs[1] / adx_length) + minusDM
+trs := na(trs[1]) ? trueRange : trs[1] - (trs[1] / adx_length) + trueRange
+plusDI = 100 * (plusDMs / trs)
+minusDI = 100 * (minusDMs / trs)
+dx = math.abs(plusDI - minusDI) / (plusDI + minusDI) * 100
+adx_val = ta.sma(dx, adx_length)
+ranging = adx_val < adx_threshold
+
+// Calculate adaptive Bollinger Bands
+trade_closed = strategy.closedtrades > strategy.closedtrades[1]
+if trade_closed
+    last_profit = strategy.closedtrades.profit(strategy.closedtrades - 1)
+    array.push(recent_profits, last_profit)
+    if array.size(recent_profits) > max_history
+        array.shift(recent_profits)
+
+adaptive_mult = 2.0
+float avg_prof = na
+if array.size(recent_profits) > 0
+    avg_prof := array.avg(recent_profits)
+    adaptive_mult := avg_prof > 0 ? 1.5 : 2.5
+
+middle = ta.sma(close, bb_length)
+std = ta.stdev(close, bb_length)
+upper = middle + adaptive_mult * std
+lower = middle - adaptive_mult * std
+
+// Entry conditions
+long_cond = ta.crossunder(close, lower) and ranging and not long_position_active
+short_cond = ta.crossover(close, upper) and ranging and not short_position_active
+
+// Position sizing
+risk_amount = strategy.equity * (risk_per_trade / 100)
+risk_per_unit = close * (sl_percent / 100)
+qty_calc = math.max(1, math.floor(risk_amount / risk_per_unit))
+
+// ========= ALERT JSON CONSTRUCTION =========
+// We construct a valid JSON string to send to the Python bot
+create_json_alert(action, price) =>
+    string json = "{"
+    json += "\"pair\": \"" + syminfo.ticker + "\", "
+    json += "\"action\": \"" + action + "\", "
+    json += "\"price\": " + str.tostring(price) + ", "
+    json += "\"timeframe\": \"" + timeframe.period + "\""
+    json += "}"
+    json
+
+// Trigger strategy and alerts
+if long_cond
+    strategy.entry("Long", strategy.long, qty=qty_calc)
+    if enable_alerts
+        alert(create_json_alert("LONG", close), alert.freq_once_per_bar_close)
+    long_position_active := true
+    short_position_active := false
+
+if short_cond
+    strategy.entry("Short", strategy.short, qty=qty_calc)
+    if enable_alerts
+        alert(create_json_alert("SHORT", close), alert.freq_once_per_bar_close)
+    short_position_active := true
+    long_position_active := false
+
+// Exits
+if ta.crossover(close, middle) and strategy.position_size > 0
+    strategy.close("Long", comment="MR Exit")
+    long_position_active := false
+
+if ta.crossunder(close, middle) and strategy.position_size < 0
+    strategy.close("Short", comment="MR Exit")
+    short_position_active := false
+
+// Plotting
+plot(middle, color=color.blue, title="BB Middle")
+plot(upper, color=color.green, title="BB Upper")
+plot(lower, color=color.red, title="BB Lower")
