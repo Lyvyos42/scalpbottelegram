@@ -80,70 +80,69 @@ class TelegramNotifier:
             direction = trade_plan['direction']
             entry = trade_plan['entry_price']
             sl = trade_plan['stop_loss']
-            timeframe = trade_plan['timeframe']
-            stop_pips = trade_plan.get('stop_pips', 0)
+            timeframe = trade_plan.get('timeframe', '5M')
+            score = trade_plan.get('score', 0)
+            pattern = trade_plan.get('pattern', '')
+            session = trade_plan.get('session', '')
             
-            # Helper to get direction content
-            if "LONG" in direction.upper() or "BUY" in direction.upper():
-                direction_emoji = "🟢"
-                direction_text = "BUY / LONG"
-                header_emoji = "🚀"
-            else:
-                direction_emoji = "🔴"
-                direction_text = "SELL / SHORT"
-                header_emoji = "📉"
-            
-            # Format numbers based on symbol type
             symbol_upper = symbol.upper().replace("/", "")
             
-            def fmt_price(price):
+            if "LONG" in direction.upper() or "BUY" in direction.upper():
+                dir_emoji = "🟢"
+                dir_text = "BUY / LONG"
+                head_emoji = "🚀"
+            else:
+                dir_emoji = "🔴"
+                dir_text = "SELL / SHORT"
+                head_emoji = "📉"
+            
+            def fmt(price):
                 if any(x in symbol_upper for x in ["XAU", "XAG"]):
                     return f"{price:.2f}"
-                elif any(x in symbol_upper for x in ["BTC", "ETH", "SOL"]):
+                elif any(x in symbol_upper for x in ["BTC", "ETH"]):
                     return f"{price:.2f}"
                 elif "JPY" in symbol_upper:
                     return f"{price:.3f}"
-                else:
-                    return f"{price:.5f}"
-
-            entry_fmt = fmt_price(entry)
-            sl_fmt = fmt_price(sl)
+                return f"{price:.5f}"
             
-            # Construct TP block with R:R info
+            # Build TP block
             tp_block = ""
-            emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
-            for i, tp in enumerate(trade_plan.get('take_profits', [])):
-                tp_price_fmt = fmt_price(tp['price'])
-                emoji = emojis[i] if i < len(emojis) else f"{i+1}."
-                rr = tp.get('rr_ratio', '?')
-                tp_block += f"{emoji} <code>{tp_price_fmt}</code> (Risk: {rr}R)\n"
-
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M UTC')
+            tps = trade_plan.get('take_profits', [])
+            for i, tp in enumerate(tps):
+                price = tp.get('price', 0)
+                rr = tp.get('rr_ratio', i+1)
+                tp_block += f"{i+1}️⃣ <code>{fmt(price)}</code> ({rr}R)\n"
             
-            # Determine pips label
-            if any(x in symbol_upper for x in ["BTC", "ETH", "SOL", "XAU", "XAG"]):
-                risk_label = f"${stop_pips}"
+            # Score badge
+            if score >= 85:
+                score_badge = f"🔥🔥 {score}/100"
+            elif score >= 70:
+                score_badge = f"🔥 {score}/100"
             else:
-                risk_label = f"{stop_pips} pips"
+                score_badge = f"✅ {score}/100"
+            
+            risk_pips = abs(entry - sl)
+            if "XAU" in symbol_upper:
+                risk_pips = risk_pips / 0.10
+            
+            msg = f"""<b>{head_emoji} SIGNAL: {symbol}</b>
+{dir_emoji} <b>{dir_text}</b>
 
-            message = f"""
-<b>{header_emoji} SIGNAL: {symbol}</b>
-{direction_emoji} <b>{direction_text}</b>
+<b>Entry:</b> <code>{fmt(entry)}</code>
+<b>Stop Loss:</b> <code>{fmt(sl)}</code>
 
-<b>Entry:</b> <code>{entry_fmt}</code>
-<b>Stop Loss:</b> <code>{sl_fmt}</code>
-<i>(Risk: {risk_label})</i>
-
-<b>👇 Take Profits:</b>
+<b>🎯 Targets:</b>
 {tp_block}
-<b>Timeframe:</b> {timeframe}
-<i>{current_time}</i>
+<b>Score:</b> {score_badge}
+<b>Pattern:</b> {pattern}
+<b>Session:</b> {session}
+<b>TF:</b> {timeframe}
 
-#{symbol.replace('/', '')} #{direction.split(' ')[0]}
-"""
-            return self.send_message(message)
+<i>{datetime.now().strftime('%Y-%m-%d %H:%M')}</i>
+#{symbol_upper} #{direction.split()[0]}"""
+            return self.send_message(msg)
         except Exception as e:
-            logger.error(f"Error creating trade signal message: {e}")
+            logger.error(f"Error in send_trade_signal: {e}")
             return False
 
     def send_profit_update(self, symbol: str, action: str, price: float):
@@ -348,75 +347,86 @@ class TradingBot:
     def process_webhook(self, data: Dict) -> bool:
         """Process incoming webhook data"""
         try:
-            logger.info(f"Received webhook data: {data}")
+            logger.info(f"Received webhook: {data}")
             
-            # Extract standard fields
             symbol = data.get('pair') or data.get('symbol') or "UNKNOWN"
-            direction = data.get('action') or "UNKNOWN"
+            direction = data.get('action') or data.get('direction') or "UNKNOWN"
             
-            # CHECK FOR PROFIT UPDATES
-            if "TP" in direction or "_HIT" in direction:
-                logger.info(f"Processing Profit Update: {direction}")
+            # Handle TP/SL hit notifications
+            if "TP" in direction.upper() or "_HIT" in direction.upper():
                 price = float(data.get('price', 0))
                 if self.telegram:
                     return self.telegram.send_profit_update(symbol, direction, price)
                 return False
-
-            # Filter out non-entry signals if you only want entries
-            if direction not in ["LONG", "SHORT", "BUY", "SELL"]:
-                logger.info(f"Ignoring non-entry signal: {direction}")
+            
+            if direction.upper() not in ["LONG", "SHORT", "BUY", "SELL"]:
+                logger.info(f"Ignoring: {direction}")
                 return False
-                
-            entry_price = float(data.get('price', 0))
+            
+            entry = float(data.get('price') or data.get('entry', 0))
             timeframe_str = data.get('timeframe', "5M")
+            score = int(data.get('score') or data.get('ai_score', 0))
+            pattern = data.get('pattern', '')
+            session = data.get('session', '')
             
-            # Map timeframe
-            tf_map = {
-                "1M": TimeFrame.M1, "3M": TimeFrame.M3, "5M": TimeFrame.M5,
-                "15M": TimeFrame.M15, "30M": TimeFrame.M30, "1H": TimeFrame.H1,
-                "4H": TimeFrame.H4, "1D": TimeFrame.D1
-            }
-            timeframe = tf_map.get(timeframe_str.upper(), TimeFrame.M5)
+            # Check if TPs provided by Pine Script
+            tp1 = data.get('tp1') or data.get('take_profit_1')
+            tp2 = data.get('tp2') or data.get('take_profit_2')
+            tp3 = data.get('tp3') or data.get('take_profit_3')
+            sl = data.get('stop_loss')
             
-            # Calculate plan
-            market_profile = self.get_market_profile(symbol)
+            if tp1 and tp2 and tp3 and sl:
+                # Use Pine Script provided values
+                trade_plan = {
+                    "symbol": symbol,
+                    "direction": direction,
+                    "timeframe": timeframe_str,
+                    "entry_price": entry,
+                    "stop_loss": float(sl),
+                    "score": score,
+                    "pattern": pattern,
+                    "session": session,
+                    "take_profits": [
+                        {"price": float(tp1), "rr_ratio": 1.5},
+                        {"price": float(tp2), "rr_ratio": 2.5},
+                        {"price": float(tp3), "rr_ratio": 4.0}
+                    ]
+                }
+            else:
+                # Calculate TPs dynamically
+                tf_map = {
+                    "1": TimeFrame.M1, "3": TimeFrame.M3, "5": TimeFrame.M5,
+                    "15": TimeFrame.M15, "30": TimeFrame.M30, "60": TimeFrame.H1,
+                    "240": TimeFrame.H4, "D": TimeFrame.D1, "1D": TimeFrame.D1
+                }
+                tf = tf_map.get(timeframe_str.upper().replace("M","").replace("H",""), TimeFrame.M5)
+                profile = self.get_market_profile(symbol)
+                
+                stop_data = self.risk_manager.calculate_stop_loss(
+                    symbol, entry, direction, tf, profile.market_type
+                )
+                tp_levels = self.risk_manager.calculate_take_profits(
+                    entry, stop_data["stop_pips"], direction, tf, symbol, profile.market_type
+                )
+                
+                trade_plan = {
+                    "symbol": symbol,
+                    "direction": direction,
+                    "timeframe": tf.value,
+                    "entry_price": entry,
+                    "stop_loss": stop_data["stop_loss"],
+                    "score": score,
+                    "pattern": pattern,
+                    "session": session,
+                    "take_profits": tp_levels
+                }
             
-            stop_data = self.risk_manager.calculate_stop_loss(
-                symbol=symbol,
-                entry_price=entry_price,
-                direction=direction,
-                timeframe=timeframe,
-                market_type=market_profile.market_type
-            )
-            
-            tp_levels = self.risk_manager.calculate_take_profits(
-                entry_price=entry_price,
-                stop_pips=stop_data["stop_pips"],
-                direction=direction,
-                timeframe=timeframe,
-                symbol=symbol,
-                market_type=market_profile.market_type
-            )
-            
-            trade_plan = {
-                "symbol": symbol,
-                "direction": direction,
-                "timeframe": timeframe.value,
-                "entry_price": entry_price,
-                "stop_loss": stop_data["stop_loss"],
-                "stop_pips": stop_data["stop_pips"],
-                "take_profits": tp_levels
-            }
-            
-            # Send
             if self.telegram:
                 return self.telegram.send_trade_signal(trade_plan)
-            else:
-                logger.error("Telegram not initialized, cannot send signal")
-                return False
-                
+            logger.error("Telegram not initialized")
+            return False
         except Exception as e:
-            logger.error(f"Error processing webhook: {e}")
+            logger.error(f"Webhook error: {e}")
             return False
 
 # Initialize bot instance

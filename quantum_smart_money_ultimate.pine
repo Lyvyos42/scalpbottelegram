@@ -1,0 +1,218 @@
+//@version=6
+indicator("⚡ QUANTUM SMART MONEY • ULTIMATE 2026", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=200)
+
+// ═══════════════════════════════════════════════════════════════════
+// 🎨 COLORS
+// ═══════════════════════════════════════════════════════════════════
+color_bull = #00ff88
+color_bear = #ff0088
+color_gold = #FFD700
+
+// ═══════════════════════════════════════════════════════════════════
+// ⚙️ SETTINGS
+// ═══════════════════════════════════════════════════════════════════
+alert_format = input.string("JSON", "Alert Format", options=["JSON", "Plain Text"], group="🔔 Alerts")
+min_score = input.int(65, "Min AI Score", minval=40, maxval=95, group="🔧 Filters")
+
+// TP/SL Settings - CORRECTED VALUES
+scalp_tp1 = input.float(60, "Scalp TP1 (pips)", group="🎯 Targets")
+scalp_tp2 = input.float(100, "Scalp TP2 (pips)", group="🎯 Targets")
+scalp_tp3 = input.float(150, "Scalp TP3 (pips)", group="🎯 Targets")
+swing_tp1 = input.float(100, "Swing TP1 (pips)", group="🎯 Targets")
+swing_tp2 = input.float(200, "Swing TP2 (pips)", group="🎯 Targets")
+swing_tp3 = input.float(400, "Swing TP3 (pips)", group="🎯 Targets")
+atr_sl_mult = input.float(1.5, "ATR SL Multiplier", step=0.1, group="🛡️ Risk")
+
+// ═══════════════════════════════════════════════════════════════════
+// 📊 CORE DETECTION
+// ═══════════════════════════════════════════════════════════════════
+symbol_name = syminfo.ticker
+is_gold = str.contains(symbol_name, "XAU") or str.contains(symbol_name, "GOLD")
+is_btc = str.contains(symbol_name, "BTC")
+is_forex = syminfo.type == "forex"
+
+// CORRECTED: Gold pip = $0.10, not $0.01
+pip_size = is_btc ? 1.0 : is_gold ? 0.10 : is_forex ? 0.0001 : 0.01
+display_symbol = is_gold ? "XAUUSD" : is_btc ? "BTCUSD" : symbol_name
+
+// Timeframe detection
+tf_seconds = timeframe.in_seconds(timeframe.period)
+is_scalp = tf_seconds <= 900  // 15m or less
+
+// Session detection
+hour_utc = hour(time)
+in_london_kill = hour_utc >= 8 and hour_utc < 10
+in_ny_open = hour_utc >= 13 and hour_utc < 15
+in_london = hour_utc >= 8 and hour_utc < 16
+in_ny = hour_utc >= 13 and hour_utc < 22
+session_name = in_london_kill ? "LONDON_KILL" : in_ny_open ? "NY_OPEN" : in_london ? "LONDON" : in_ny ? "NY" : "ASIAN"
+
+// ═══════════════════════════════════════════════════════════════════
+// 📈 INDICATORS
+// ═══════════════════════════════════════════════════════════════════
+atr_val = ta.atr(14)
+vol_ma = ta.sma(volume, 20)
+ema_50 = ta.ema(close, 50)
+ema_200 = ta.ema(close, 200)
+
+is_bull_trend = close > ema_200 and ema_50 > ema_200
+is_bear_trend = close < ema_200 and ema_50 < ema_200
+high_volume = volume > vol_ma * 1.5
+
+// Bar analysis
+body_size = math.abs(close - open)
+bar_range = high - low
+is_bullish_bar = close > open and body_size > bar_range * 0.5
+is_bearish_bar = close < open and body_size > bar_range * 0.5
+
+// ═══════════════════════════════════════════════════════════════════
+// 💎 SMART MONEY PATTERNS
+// ═══════════════════════════════════════════════════════════════════
+
+// Order Block Detection
+bullish_ob = close[1] < open[1] and close > high[1] and body_size > atr_val * 0.5
+bearish_ob = close[1] > open[1] and close < low[1] and body_size > atr_val * 0.5
+
+// FVG Detection
+bullish_fvg = low > high[2]
+bearish_fvg = high < low[2]
+
+// Liquidity Sweep
+recent_high = ta.highest(high, 10)[1]
+recent_low = ta.lowest(low, 10)[1]
+liq_sweep_bull = low < recent_low and close > recent_low and close > open
+liq_sweep_bear = high > recent_high and close < recent_high and close < open
+
+// Combined Signals
+base_long = (bullish_ob or bullish_fvg or liq_sweep_bull) and is_bullish_bar and high_volume
+base_short = (bearish_ob or bearish_fvg or liq_sweep_bear) and is_bearish_bar and high_volume
+
+// ═══════════════════════════════════════════════════════════════════
+// 🧠 AI SCORING
+// ═══════════════════════════════════════════════════════════════════
+calc_score(is_long) =>
+    score = 50.0
+    score += in_london_kill ? 15 : in_ny_open ? 12 : 5
+    score += volume > vol_ma * 2 ? 15 : volume > vol_ma * 1.5 ? 10 : 0
+    score += (is_long and is_bull_trend) or (not is_long and is_bear_trend) ? 15 : 0
+    score += bullish_ob or bearish_ob ? 10 : 0
+    math.min(100, score)
+
+score_long = calc_score(true)
+score_short = calc_score(false)
+
+// ═══════════════════════════════════════════════════════════════════
+// 🎯 SIGNAL GENERATION
+// ═══════════════════════════════════════════════════════════════════
+signal_long = base_long and score_long >= min_score and is_bull_trend
+signal_short = base_short and score_short >= min_score and is_bear_trend
+
+new_long = signal_long and not signal_long[1]
+new_short = signal_short and not signal_short[1]
+
+// ═══════════════════════════════════════════════════════════════════
+// 💰 TP/SL CALCULATION - CORRECTED
+// ═══════════════════════════════════════════════════════════════════
+// Use proper pip values
+tp1_pips = is_scalp ? scalp_tp1 : swing_tp1
+tp2_pips = is_scalp ? scalp_tp2 : swing_tp2
+tp3_pips = is_scalp ? scalp_tp3 : swing_tp3
+
+// Calculate SL from ATR
+sl_pips = (atr_val / pip_size) * atr_sl_mult
+sl_pips := math.max(sl_pips, 15)  // Minimum 15 pips
+
+// Convert to price distance
+tp1_dist = tp1_pips * pip_size
+tp2_dist = tp2_pips * pip_size
+tp3_dist = tp3_pips * pip_size
+sl_dist = sl_pips * pip_size
+
+// Pattern detection for alert message
+get_pattern() =>
+    bullish_ob or bearish_ob ? "ORDER_BLOCK" : 
+    bullish_fvg or bearish_fvg ? "FAIR_VALUE_GAP" : 
+    liq_sweep_bull or liq_sweep_bear ? "LIQUIDITY_SWEEP" : "MOMENTUM"
+
+pattern = get_pattern()
+
+// ═══════════════════════════════════════════════════════════════════
+// 📡 ALERT BUILDERS - FIXED JSON FORMAT
+// ═══════════════════════════════════════════════════════════════════
+
+// JSON format matching Python bot expectations
+build_json_alert(dir, entry, sl, t1, t2, t3, sc) =>
+    "{" +
+    "\"pair\":\"" + display_symbol + "\"," +
+    "\"action\":\"" + dir + "\"," +
+    "\"price\":" + str.tostring(entry, format.mintick) + "," +
+    "\"stop_loss\":" + str.tostring(sl, format.mintick) + "," +
+    "\"tp1\":" + str.tostring(t1, format.mintick) + "," +
+    "\"tp2\":" + str.tostring(t2, format.mintick) + "," +
+    "\"tp3\":" + str.tostring(t3, format.mintick) + "," +
+    "\"timeframe\":\"" + timeframe.period + "\"," +
+    "\"score\":" + str.tostring(math.round(sc)) + "," +
+    "\"pattern\":\"" + pattern + "\"," +
+    "\"session\":\"" + session_name + "\"" +
+    "}"
+
+// Plain text format
+build_plain_alert(dir, entry, sl, t1, t2, t3, sc) =>
+    "⚡ " + display_symbol + " " + dir + "\n" +
+    "Entry: " + str.tostring(entry, format.mintick) + "\n" +
+    "SL: " + str.tostring(sl, format.mintick) + "\n" +
+    "TP1: " + str.tostring(t1, format.mintick) + "\n" +
+    "TP2: " + str.tostring(t2, format.mintick) + "\n" +
+    "TP3: " + str.tostring(t3, format.mintick) + "\n" +
+    "Score: " + str.tostring(math.round(sc)) + "/100"
+
+// ═══════════════════════════════════════════════════════════════════
+// 🔔 ALERT TRIGGERS
+// ═══════════════════════════════════════════════════════════════════
+if new_long
+    entry = close
+    sl = close - sl_dist
+    t1 = close + tp1_dist
+    t2 = close + tp2_dist
+    t3 = close + tp3_dist
+    
+    msg = alert_format == "JSON" ? 
+        build_json_alert("LONG", entry, sl, t1, t2, t3, score_long) :
+        build_plain_alert("LONG", entry, sl, t1, t2, t3, score_long)
+    
+    alert(msg, alert.freq_once_per_bar)
+
+if new_short
+    entry = close
+    sl = close + sl_dist
+    t1 = close - tp1_dist
+    t2 = close - tp2_dist
+    t3 = close - tp3_dist
+    
+    msg = alert_format == "JSON" ? 
+        build_json_alert("SHORT", entry, sl, t1, t2, t3, score_short) :
+        build_plain_alert("SHORT", entry, sl, t1, t2, t3, score_short)
+    
+    alert(msg, alert.freq_once_per_bar)
+
+// ═══════════════════════════════════════════════════════════════════
+// 🎨 VISUALS
+// ═══════════════════════════════════════════════════════════════════
+plot(ema_50, "EMA 50", color=color.new(color_bull, 60), linewidth=2)
+plot(ema_200, "EMA 200", color=color.new(color_bear, 30), linewidth=3)
+
+plotshape(new_long, style=shape.triangleup, location=location.belowbar, 
+     color=color_bull, size=size.normal, title="Long Signal")
+plotshape(new_short, style=shape.triangledown, location=location.abovebar, 
+     color=color_bear, size=size.normal, title="Short Signal")
+
+// Signal labels
+if new_long
+    label.new(bar_index, low, "🚀 LONG\n[" + str.tostring(math.round(score_long)) + "]",
+         style=label.style_label_up, color=color.new(#000000, 10),
+         textcolor=color_bull, size=size.normal)
+
+if new_short
+    label.new(bar_index, high, "📉 SHORT\n[" + str.tostring(math.round(score_short)) + "]",
+         style=label.style_label_down, color=color.new(#000000, 10),
+         textcolor=color_bear, size=size.normal)
